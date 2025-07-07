@@ -114,7 +114,7 @@ Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de me
 
 - Tecnologia já consolidada.
 
-- Performance previsível: Internamente, 95% de todas as requisições tem obrigatóriamente que serem feitas abaixo de 80 milisegundos. Se esse tempo for ultrapassado, então alertas serão enviados para a equipe de engenharia averiguar. Além disso, eles não querem 'cachear' mensagens em um sistema como o Redis e o Memchached. **(pq?)**
+- Performance previsível: Internamente, 95% de todas as requisições tem obrigatóriamente que serem feitas abaixo de 80 milisegundos. Se esse tempo for ultrapassado, então alertas serão enviados para a equipe de engenharia averiguar. Além disso, eles não querem 'cachear' mensagens em um sistema como o Redis e o Memchaced. **(pq?)**
 
 - Não é uma 'blob-store': **(definir o que é um blob)**. Ter que lidar com os processos envolvidos com blobs seria muito custoso.
 
@@ -133,3 +133,39 @@ O Cassandra preenche todos os requisitos:
 - É open source.
 
 ### Modelagem dos dados
+
+Segundo o artigo (billions), a melhor maneira de descrever o Cassandra é como uma 'KKV store' - **K**ey-**K**ey-**V**alue. Imagine que temos um arquivo físico com diversas pastas e que cada pasta contém fichas ordenadas.
+
+O primeiro K é a chave de partição que o Cassandra usa para decidir em qual servidor (nó) o dado vai ser armazenado. Ela também determina a localização física do dado no disco do servidor. Na nossa analogia, esse K seria equivalente à etiqueta na frente da pasta, então teríamos pastas do tipo: 'Canal A', 'Canal B', 'Canal C' e etc, sendo que K seria o nome do canal.
+
+Cada partição contém múltiplas tuplas. Dentro de cada partição definida pela chave de partição, é possível ter diversos registros de dados. Na analogia, é como se na pasta 'Canal A', tivessemos várias fichas de papel, sendo que cada ficha representa uma mensagem.
+
+Cada tupla dentro da partição é identificada pelo segundo K, que é a chave de agrupamento. Além de ser o identificador único de cada tupla, ele também é responsável pela ordem que as linhas serão armazenadas no disco. Na analogia, seria como a data e hora de uma mensagem (para esta analogia, suponha que as mensagens não podem ser enviadas exatamente no mesmo momento, algo que é possível no discord). As fichas não estariam simplesmente jogadas na pasta, elas seriam organizadas por data e hora, sendo que cada data/hora identifica unicamente uma mensagem.
+
+[Documentação do Cassandra sobre modelagem de dados](https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/intro.html)
+
+### Aplicando a Modelagem de Dados no Discord
+
+Com o modelo KKV em mente, a equipe do Discord aplicou esses conceitos diretamente para resolver seus problemas de performance. A estratégia foi mapear o padrão de acesso mais comum — carregar as mensagens de um canal específico — para a estrutura de chaves do Cassandra.
+
+A chave primária da tabela de mensagens foi definida como (channel_id, message_id):
+
+1.  channel_id como Chave de Partição: Assim como no MongoDB o índice era em channel_id e created_at, a channel_id foi a escolha natural para a chave de partição. Isso garante que todas as mensagens de um mesmo canal sejam armazenadas juntas no mesmo nó, otimizando a busca inicial.
+
+2.  message_id como Chave de Agrupamento: Inicialmente, created_at (data de criação) parecia uma boa candidata para a chave de agrupamento, pois as mensagens são exibidas em ordem cronológica. No entanto, duas mensagens podem ser criadas no mesmo instante, o que violaria a unicidade da chave. A solução foi usar o message_id. Cada ID no Discord é um Snowflake, um tipo de identificador que, além de ser único, é cronologicamente ordenável. Isso permitiu que o message_id servisse perfeitamente como a chave de agrupamento, garantindo unicidade e ordem.
+
+Com essa estrutura, ao carregar um canal, o Discord pode pedir ao Cassandra um "range scan" (leitura de intervalo) exato, tornando a busca de mensagens extremamente rápida e previsível.
+
+O esquema simplificado da tabela de mensagens ficou assim:
+
+```sql
+CREATE TABLE messages (
+  channel_id bigint,
+  message_id bigint,
+  author_id bigint,
+  content text,
+  PRIMARY KEY (channel_id, message_id)
+) WITH CLUSTERING ORDER BY (message_id DESC);
+```
+
+A cláusula `WITH CLUSTERING ORDER BY (message_id DESC)` instrui o Cassandra a armazenar as mensagens em ordem decrescente de `message_id` dentro de cada partição. Isso é uma otimização extra: como os usuários quase sempre querem ver as mensagens mais recentes primeiro, o banco de dados já as armazena na ordem exata em que serão exibidas, tornando a leitura ainda mais eficiente.
