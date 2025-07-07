@@ -75,3 +75,61 @@ Os títulos dos artigos ressaltam e engrandecem a ordem de grandeza da quantidad
 Além da pura quantidade de mensagens armazenadas, existem outros fatores que motivaram essas atualizações?
 
 Este projeto tem como objetivo entender esse questionamento.
+
+## 4. Migração para o Cassandra (2017)
+
+Em julho de 2016, foi anunciado que o discord armazenava 40 milhões de mensagens por dia. Em dezembro desse mesmo ano, o número mais que dobrou: 100 milhões. Segundo o artigo 'How Discord Stores Billions of Messages', eles tomaram a decisão de projeto inicial de nunca apagar mensagens e chats, o que gera um enorme volume de dados. Como eles fazem isso? Cassandra!
+
+A escolha inicial pelo MongoDB se dá, indiscutivelmente segundo eles, pois esse ele permite escala de maneira rápida **(pq? isso talvez seja em outra seção)**. Tudo foi guardado em um único replica set e isso foi intencional, tudo foi planejado para uma futura migração, pois eles também sabiam que não iam continuar com o mongo porque o sharding é complicado e não tem reputação muito boa em questões de estabilidade **(pq?)**. Parte da filosofia da empresa: construir rápido para provar o conceito de um MVP, mas já deixar o caminho aberto para melhoria.
+
+As mensagens eram armazenadas em uma coleção do Mongo com um único índice composto nos atributos channel_id e created_at. Essa escolha de índice se dá pelo seguinte principal motivo:
+
+- Uma conversa pertence à um canal (um grupo - normalmente chamado de servidor - ou um chat entre dois usuários, como na imagem abaixo) e elas possuem uma ordem de tempo nas imagens enviadas. Logo, para buscar as imagens rapidamente e de maneira ordenada, faz muito sentido criar um índice nesses campos. Como a seletividade das mensagens sempre será baixa (já que se uma conversa tiver 1 milhão de mensagens, ainda assim é somente 10% da quantidade de mensagens trocadas POR DIA em 2017), fazendo com que o índice sempre seja acessado.
+
+![Conversa no discord](discord-chat.png)
+
+Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de mensagens armazenadas e foi nesse momento que eles perceberam os problemas esperados acontecendo: os dados e os índices já não cabiam mais na memória principal e as latências se tornaram imprevisiveís **(pq? nao podia escalar horizontalmente? - segundo eles o sharding do mongo é ruim)**.
+
+### Padrões de Leitura/Escrita e problemas com a arquitetura atual
+
+- Os reads eram extremamente aleatórios e a proporção de reads/writes era por volta de 50/50.
+
+- Servidores discord focados principalmente em chat por voz eram um problema, já que pouquissimas mensagens eram trocadas e isso causava um problema conhecido: as poucas mensagens podem estar muito distantes fisicamente no disco, fazendo com sejam feitas muitas leituras aleatórias, o que é um dos principais gargalos de sistemas computacionais, já que é uma operação extremamente cara. Além disso, isso causa o que é conhecido como 'disk cache evictions':
+
+  - É o processo de remoção de dados do cache de disco (uma área rápida de memória) para dar lugar a novos dados. O problema ocorre quando dados raramente acessados (como mensagens antigas em chats inativos, ou mesmo as mensagens desses servidores onde os canais de chat são pouco utilizados) são lidos do disco e forçam a remoção de dados "quentes" (frequentemente acessados) do cache. Quando esses dados "quentes" são necessários novamente, eles precisam ser lidos do disco, que é uma operação lenta, causando degradação na performance e latências imprevisíveis.
+
+- Servidores médios que são mais focados em chat de mensagens não possuem esse problema em especifíco, mas acaba sendo similar uma vez que possuem poucos usuários, então as mensagens usualmente não estão em cache, sendo necessário acesso ao disco.
+
+- Servidores grandes mandam muitas mensagens. Possuem milhares de usuários mandando milhares de mensagens. Eles fazem requests de mensagens recentes praticamente o tempo todo, então a chance da mensagem procurada estar em cache é alta.
+
+- As features encaminhadas iriam implicar em ainda mais acessos aleatórios ao disco, como por exemplo a possibilidade de ver suas menções (@eu) nos últimos 30 dias.
+
+### Requisitos definidos
+
+- Escalabilidade linear: Não queriam reconsiderar a solução ou precisar fazer 're-shard' dos dados
+
+- Recuperação automática: o Discord deveria se auto-recuperar o máximo possível
+
+- Baixa manutenção: Deve funcionar depois da configuração. A única manutenção a ser realizada deve ser a de adicionar novos nós conforme os dados crescem.
+
+- Tecnologia já consolidada.
+
+- Performance previsível: Internamente, 95% de todas as requisições tem obrigatóriamente que serem feitas abaixo de 80 milisegundos. Se esse tempo for ultrapassado, então alertas serão enviados para a equipe de engenharia averiguar. Além disso, eles não querem 'cachear' mensagens em um sistema como o Redis e o Memchached. **(pq?)**
+
+- Não é uma 'blob-store': **(definir o que é um blob)**. Ter que lidar com os processos envolvidos com blobs seria muito custoso.
+
+- Open source: Eles não queriam depender de uma outra empresa para algo tão essêncial no negócio deles.
+
+O Cassandra preenche todos os requisitos:
+
+- Para escalar, basta adicionar nós.
+
+- Pode tolerar perda de nós sem impacto nenhum na aplicação.
+
+- Empresas como a Netflix e Apple possuem milhares de nós Cassandra.
+
+- Dados relacionados são mantidos continuamente no disco, proporcionando o minimo de seeks e fácil distribuição no cluster (precisa explicar melhor esse ponto, acho que é o principal e tem a ver com a principal caracteristica do Cassandra - ser oritentado a colunas)
+
+- É open source.
+
+### Modelagem dos dados
