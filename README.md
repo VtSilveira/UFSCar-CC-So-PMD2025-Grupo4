@@ -168,4 +168,130 @@ CREATE TABLE messages (
 ) WITH CLUSTERING ORDER BY (message_id DESC);
 ```
 
-A cláusula `WITH CLUSTERING ORDER BY (message_id DESC)` instrui o Cassandra a armazenar as mensagens em ordem decrescente de `message_id` dentro de cada partição. Isso é uma otimização extra: como os usuários quase sempre querem ver as mensagens mais recentes primeiro, o banco de dados já as armazena na ordem exata em que serão exibidas, tornando a leitura ainda mais eficiente.
+A cláusula WITH CLUSTERING ORDER BY (message_id DESC) instrui o Cassandra a armazenar as mensagens em ordem decrescente de message_id dentro de cada partição. Isso é uma otimização extra: como os usuários quase sempre querem ver as mensagens mais recentes primeiro, o banco de dados já as armazena na ordem exata em que serão exibidas, tornando a leitura ainda mais eficiente.
+
+### O Problema das Partições Gigantes e a Solução com "Bucketing"
+
+Durante a migração dos dados do MongoDB, a equipe do Discord encontrou um problema: alguns canais eram tão ativos que suas partições no Cassandra estavam ultrapassando o [limite recomendado de 100MB](https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/intro.html#data-model-analysis).
+
+Segundo o artigo do Discord, as razões de partições grandes serem um problema são operacionais e afetam a performance e estabilidade do banco de dados:
+
+- **Pressão na Memória (GC):** Operações em partições muito grandes consomem uma quantidade significativa de memória RAM no servidor, podendo levar a longas pausas para "coleta de lixo" (Garbage Collection).
+  - O cassandra é escrito em Java, por isso existe essa pressão na JVM. [repositório oficial do cassandra](https://github.com/apache/cassandra)
+- **Latência de Leitura/Escrita:** O banco de dados precisa trabalhar mais para ler e manter a consistência de dados espalhados em uma partição enorme.
+- **Manutenção Lenta:** Processos internos do Cassandra, como compactação, tornam-se extremamente lentos e custosos quando precisam operar em partições gigantes.
+  - Processo de compactação: Para entender esse processo, é importante entender como o Cassandra armazena fisicamente seus dados. Eles são escritos em arquivos chamados de SSTables. Para que o write do Cassandra seja extremamente rápido, eles não escrevem diretamente nesse arquivo, ao invés disso, os dados são primeiramente escritos de maneira ordenada em uma estrutura em memória principal chamada memtable até que um limite configurável seja atingido. Então essa memtable passa por um processo de 'flushing' para escrever os dados no arquivo SSTable. Para manter essas SSTables, a cada inserção/update, o Cassandra escreve versões com timestamps dos novos dados em novas SSTables. Ao deletar dados, eles não são fisicamente deletados, ao invés disso são marcados como tombstones. Com o passar do tempo, acessar as tabelas podem exigir percorrer mais SSTables e para evitar isso, ocorre o processo de compactação, que é basicamente o merge das tabelas mantendo as versões mais recentes e apagando fisicamente os tombstones. [Documentação da empresa que mantém o Cassandra sobre o processo de compactação](https://docs.datastax.com/en/cassandra-oss/3.x/cassandra/dml/dmlHowDataMaintain.html#Compaction)
+
+Para resolver isso, o Discord aplicou uma técnica de modelagem de dados comum no Cassandra chamada bucketing. A ideia é dividir artificialmente uma partição grande em várias partições físicas menores, adicionando um novo campo à chave de partição.
+
+A chave primária foi alterada:
+
+```sql
+CREATE TABLE messages (
+   channel_id bigint,
+   bucket int,
+   message_id bigint,
+   author_id bigint,
+   content text,
+   PRIMARY KEY ((channel_id, bucket), message_id)
+) WITH CLUSTERING ORDER BY (message_id DESC);
+```
+
+O campo `bucket` é calculado com base no tempo. No caso do Discord, eles fizeram um estudo nos maiores servidores e perceberam que guardar os últimos 10 dias de mensagens seria o ideal para manter os buckets menores que 100MB e ainda assim garantir uma performance e quantidade de dados confortável. Com isso, em vez de uma única partição gigante para um canal, agora existem várias partições menores e gerenciáveis: `(canal_123, semana_1)`, `(canal_123, semana_2)`, etc.
+
+Isso mantém as partições pequenas, garantindo a performance e a estabilidade do cluster, com a pequena desvantagem de que a aplicação agora precisa consultar múltiplos buckets para carregar um histórico de mensagens muito antigo. Isso indica que os serividores pouco utilizados precisariam percorrer diversos buckets para coletar mensagens suficientes, mas isso é OK porque para servidores mais ativos a quantidade de mensagens suficientes é encontrada na primeira partição e esses servidores são maioria.
+
+### Subindo para produção
+
+Antes de colocar o novo sistema com Cassandra totalmente em produção, eles modificaram o código para fazerem os reads/writes tanto no mongo quanto no Cassandra, afim de evitar impacto aos usuários.
+
+Logo que subiram essas mudanças eles perceberam que nos logs do sistema existiam entradas de erro dizendo que o campo obrigatório `author_id` era nulo. A culpa disso? Consistência eventual.
+
+### Consistência eventual
+
+O Cassandra é um banco AP (do teorema CAP), o que significa que é um banco com alta disponibilidade e alta resistência a partição.
+
+[Documentação do Cassandra sobre suas garantias](https://cassandra.apache.org/doc/latest/cassandra/architecture/guarantees.html)
+
+Para entender o porquê da consistência eventual ser a causa desse problema, vamos entender como a inserção dos dados no Cassandra (complementar à descrição feita acima no tópico de compactação).
+
+O Cassandra faz um Upsert: inSERT se a tupla não existe e UPdata se ela existe. O Upsert é feito somente nas colunas, não atualizando a tupla inteira. Se o mesmo campo for atualizado concorrentemente, então a mudança com maior timestamp será mantida, implementando uma forma de "last-write-wins" por coluna.
+
+[Artigo da empresa que mantém o Cassandra sobre a forma que o Cassandra faz o update de tuplas com "last-write-wins"](https://www.datastax.com/blog/why-cassandra-doesnt-need-vector-clocks)
+
+Voltando ao problema do `author_id` ser nulo, imagine a seguinte situação:
+
+- O Usuário PenidoBR está conversando em um servidor X com diversos outros usuários e envia uma mensagem ofensiva, sem perceber. O Cassandra, então, guarda a mensagem:
+  ```json
+  {
+    message_id: 123,
+    author_id: "PenidoBR",
+    content: "@Dival, você é muito frango! HAHAHAHA",
+    ...
+  }
+  ```
+- Alguns minutos depois, PenidoBR percebe que a mensagem era ofensiva e vai editá-la. Porém, ao mesmo tempo, o usuário Skineura, um moderador do servidor, vê a mensagem e decide apagá-la. Ao mesmo tempo, Skineura clica o botão de apagar e PenidoBR clica o botão de editar. Ambos ainda tem acesso à mensagem.
+
+- Por conta de latências de rede, a requisição de delete é efetuada primeiro:
+
+  ```json
+  {
+    message_id: null,
+    author_id: null,
+    content: null,
+    ...
+  }
+  ```
+
+- Logo depois, a requisição de update é efetuada:
+
+  ```json
+  {
+    message_id: 123,
+    author_id: null,
+    content: "@Dival, você precisa treinar mais! Se quiser, me chama!"
+    ...
+  }
+  ```
+
+  O resultado é uma mensagem corrompida: uma linha no banco que só tem channel_id, message_id e content. Todos os outros campos, como author_id, que não foram incluídos na operação de edição, ficam nulos. A mensagem "ressuscita", mas de forma incompleta.
+
+- Exemplo em gif:
+
+  ![Race condition](race-cond.gif)
+
+Eles pensaram em duas soluções para esse problema:
+
+1. Escrever a mensagem inteira quando for editar. Isso abre margem para a "ressureição" de mensagens deletadas e aumenta a chance de conlitos em writes concorrentes em outras colunas.
+
+2. Setando mensagens como corrompidas e deletando-as se campos obrigatórios forem nulos.
+
+Eles escolheram a segunda abordagem e escolheram o campo author_id para ser o ponto de decisão se uma mensagem está corrompida ou não.
+
+Ao resolverem esse problema, eles perceberam que estavam sendo ineficientes com seus writes. Como já citado anteriormente, ao deletar um registro, cria-se uma tombstone. O motivo disso é principalmente para manter a consistência individual, já que um registro deletado pode ressucitar no seguinte cenário (Cada [A] significa o dado A em um certo nó []):
+
+- Situação inicial: [A][A][A]
+- Delete A é enviado ao primeiro nó e propagado aos demais: [] -> [] -/ [A]. O último nó ainda não recebeu o delete por conta de qualquer problema de comunicação entre eles.
+- Dessa forma, em uma eventual sincronização do sistema, o dado A pode ressucitar para os outros nós se o dado A for atualizado e seu timestamp for maior que o do delete, de forma semelhante ao que foi descrito no caso do Discord.
+
+Se marcarmos com a tombstone, é fácil evitar esse comportamento:
+
+- Situação inicial: [A][A][A]
+- Delete A é enviado ao primeiro nó e propagado aos demais: [tombstone(A)] -> [tombstone(A)] -/ [A]. O último nó ainda não recebeu o delete por conta de qualquer problema de comunicação entre eles.
+- Dessa forma, em uma eventual sincronização do sistema, o dado A não pode ressucitar pois já foi marcado como 'morto' em outros nós, independente de sua última atualização.
+
+O sistema, ao ler tombstones, apenas "pula" elas. Elas vivem por 10 dias por default e são permanentemente deletadas no processo de compressão.
+
+[Documentação sobre tombstones](https://cassandra.apache.org/doc/5.0/cassandra/managing/operating/compaction/overview.html#tombstones)
+
+Deletar ou setar como nulo são essecialmente a mesma coisa. [Este artigo mostra, na prática, como setar uma coluna como null cria uma tombstone nessa coluna](https://digitalis.io/post/what-are-tombstones-in-cassandra-and-why-are-there-too-many). Os engenheiros do discord perceberam que, dos 16 campos da mensagem, aproximadamente 4 eram escritos com valores não nulos de fato. Eles estavam inserindo 12 tombstones na maior parte do tempo, gerando um overhead relacionado ao gerenciamento de tombstones sem motivo nenhum. A solução utilizada foi simples: se o campo não está preenchido, não envia. Dessa maneira, somente os campos de fato enviados são escritos no banco, evitando a geração de tombstones inúteis.
+
+### Performance obtida
+
+![Dados sobre a performance](performance-data.png)
+
+Como visto nessa imagem, a performance obtida foi absurda. Os reads aconteceram em cerca de 5ms e os writes em menos de 1ms.
+
+Anteriormente, foi dito que por conta da maneira que o Mongo armazenava as mensagens, era muito custoso buscar mensagens antigas pois seriam necessários muitos acessos aleatórios ao disco, uma vez que elas raramente estariam em cache. No gif a seguir, é mostrado como um jump-back de 1 ano de mensagens acontece de maneira extremamente rápida:
+
+![Jump back de um ano](jump-back.gif)
