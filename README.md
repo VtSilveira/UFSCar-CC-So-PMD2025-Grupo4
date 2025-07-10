@@ -78,9 +78,17 @@ Este projeto tem como objetivo entender esse questionamento.
 
 ## 4. Migração para o Cassandra (2017)
 
-Em julho de 2016, foi anunciado que o discord armazenava 40 milhões de mensagens por dia. Em dezembro desse mesmo ano, o número mais que dobrou: 100 milhões. Segundo o artigo 'How Discord Stores Billions of Messages', eles tomaram a decisão de projeto inicial de nunca apagar mensagens e chats, o que gera um enorme volume de dados. Como eles fazem isso? Cassandra!
+Em julho de 2016, foi anunciado que o discord armazenava 40 milhões de mensagens por dia. Em dezembro desse mesmo ano, o número mais que dobrou: 100 milhões. Segundo o artigo [How Discord Stores Billions of Messages](https://discord.com/blog/how-discord-stores-billions-of-messages), eles tomaram a decisão de projeto inicial de nunca apagar mensagens e chats, o que gera um enorme volume de dados. Como eles fazem isso? Cassandra!
 
-A escolha inicial pelo MongoDB se dá, indiscutivelmente segundo eles, pois esse ele permite escala de maneira rápida **(pq? isso talvez seja em outra seção)**. Tudo foi guardado em um único replica set e isso foi intencional, tudo foi planejado para uma futura migração, pois eles também sabiam que não iam continuar com o mongo porque o sharding é complicado e não tem reputação muito boa em questões de estabilidade **(pq?)**. Parte da filosofia da empresa: construir rápido para provar o conceito de um MVP, mas já deixar o caminho aberto para melhoria.
+A escolha inicial pelo MongoDB se dá, indiscutivelmente segundo eles, pois esse ele permite escala de maneira rápida. Tudo foi guardado em um único replica set e isso foi intencional, tudo foi planejado para uma futura migração, pois eles também sabiam que não iam continuar com o mongo porque o sharding é complicado e não tem reputação muito boa em questões de estabilidade. Essa afirmação não foi justificada no artigo, mas em alguns fóruns da internet é possível ver essa discussão:
+
+- Nesse tópico do reddit, justamente sobre essa afirmação, é discutido esse ponto e um usuário encontra um artigo dizendo que na verdade o sharding do mongo é até melhor do que o do Cassandra. Outro diz que os 'old dev folks' tem preconceito com novas tecnologias como o MongoDB. [Reddit](https://www.reddit.com/r/mongodb/comments/f83ihc/mongodb_sharding_low_stability/)
+
+- [Este artigo do medium](https://medium.com/geekculture/mongodb-why-avoid-sharding-it-should-be-kept-as-the-last-option-cb8fdc693b66) diz que o sharding é um anti-pattern, mas cita pouca coisa especificamente sobre o Mongo e sim sobre o sharding de forma geral.
+
+- [Este artigo do próprio Mongo](https://www.mongodb.com/resources/products/platform/demystifying-sharding-mongodb) tem o objetivo de desmistificar o sharding no Mongo explicando como ele funciona e como fazer.
+
+Diante dessa análise, parece que essa afirmação no artigo não foi tão embasada e o sharding em si não entra como um fator decisivo na migração de tecnologia, e sim os pontos que serão discutidos a seguir, na seção "Requisitos Definidos". É importante mencionar que essa migração começou em 2015/2016 e o Mongo evoluiu muito desde então.
 
 As mensagens eram armazenadas em uma coleção do Mongo com um único índice composto nos atributos channel_id e created_at. Essa escolha de índice se dá pelo seguinte principal motivo:
 
@@ -88,7 +96,7 @@ As mensagens eram armazenadas em uma coleção do Mongo com um único índice co
 
 ![Conversa no discord](discord-chat.png)
 
-Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de mensagens armazenadas e foi nesse momento que eles perceberam os problemas esperados acontecendo: os dados e os índices já não cabiam mais na memória principal e as latências se tornaram imprevisiveís **(pq? nao podia escalar horizontalmente? - segundo eles o sharding do mongo é ruim)**.
+Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de mensagens armazenadas e foi nesse momento que eles perceberam os problemas esperados acontecendo: os dados e os índices já não cabiam mais na memória principal e as latências se tornaram imprevisiveís. Para resolver esse problema, poderia-se implementar o sharding do próprio Mongo, mas como foi discutido anteriormente (posteriormente também veremos outros motivos que também influenciaram a decisãi tomada pelos engenheiros do Discord), essa não era uma opção.
 
 ### Padrões de Leitura/Escrita e problemas com a arquitetura atual
 
@@ -114,9 +122,10 @@ Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de me
 
 - Tecnologia já consolidada.
 
-- Performance previsível: Internamente, 95% de todas as requisições tem obrigatóriamente que serem feitas abaixo de 80 milisegundos. Se esse tempo for ultrapassado, então alertas serão enviados para a equipe de engenharia averiguar. Além disso, eles não querem 'cachear' mensagens em um sistema como o Redis e o Memchaced. **(pq?)**
+- Performance previsível: Internamente, 95% de todas as requisições tem obrigatóriamente que serem feitas abaixo de 80 milisegundos. Se esse tempo for ultrapassado, então alertas serão enviados para a equipe de engenharia averiguar. Além disso, eles não querem 'cachear' mensagens em um sistema como o Redis e o Memchaced, afim de evitar uma camada de complexidade extra no sistema.
 
-- Não é uma 'blob-store': **(definir o que é um blob)**. Ter que lidar com os processos envolvidos com blobs seria muito custoso.
+- Não é uma 'blob-store': Um "blob" (Binary Large Object) é uma coleção de dados de tamanho arbitrário (como um arquivo de imagem ou vídeo) armazenada como uma sequência de bytes, sem um formato ou estrutura específica que o banco de dados possa entender. Embora o Discord armazene anexos, a base de dados principal das mensagens precisava de consultas estruturadas (buscar por autor, data, etc.), algo que um blob-store não oferece eficientemente. Ter que lidar com os processos envolvidos com blobs para a base de mensagens seria muito custoso.
+  [O que é um blob-storage segundo a cloudflare](https://www.cloudflare.com/learning/cloud/what-is-blob-storage/)
 
 - Open source: Eles não queriam depender de uma outra empresa para algo tão essêncial no negócio deles.
 
