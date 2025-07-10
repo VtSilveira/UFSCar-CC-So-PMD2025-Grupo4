@@ -96,7 +96,7 @@ As mensagens eram armazenadas em uma coleção do Mongo com um único índice co
 
 ![Conversa no discord](discord-chat.png)
 
-Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de mensagens armazenadas e foi nesse momento que eles perceberam os problemas esperados acontecendo: os dados e os índices já não cabiam mais na memória principal e as latências se tornaram imprevisiveís. Para resolver esse problema, poderia-se implementar o sharding do próprio Mongo, mas como foi discutido anteriormente (posteriormente também veremos outros motivos que também influenciaram a decisãi tomada pelos engenheiros do Discord), essa não era uma opção.
+Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de mensagens armazenadas e foi nesse momento que eles perceberam os problemas esperados acontecendo: os dados e os índices já não cabiam mais na memória principal e as latências se tornaram imprevisiveís. Para resolver esse problema, poderia-se implementar o sharding do próprio Mongo, mas como foi discutido anteriormente (posteriormente também veremos outros motivos que também influenciaram a decisão tomada pelos engenheiros do Discord), essa não era uma opção.
 
 ### Padrões de Leitura/Escrita e problemas com a arquitetura atual
 
@@ -137,13 +137,13 @@ O Cassandra preenche todos os requisitos:
 
 - Empresas como a Netflix e Apple possuem milhares de nós Cassandra.
 
-- Dados relacionados são mantidos continuamente no disco, proporcionando o minimo de seeks e fácil distribuição no cluster (precisa explicar melhor esse ponto, acho que é o principal e tem a ver com a principal caracteristica do Cassandra - ser oritentado a colunas)
+- Dados relacionados são mantidos continuamente no disco, proporcionando o minimo de seeks e fácil distribuição no cluster.
 
 - É open source.
 
 ### Modelagem dos dados
 
-Segundo o artigo (billions), a melhor maneira de descrever o Cassandra é como uma 'KKV store' - **K**ey-**K**ey-**V**alue. Imagine que temos um arquivo físico com diversas pastas e que cada pasta contém fichas ordenadas.
+Segundo o artigo, a melhor maneira de descrever o Cassandra é como uma 'KKV store' - **K**ey-**K**ey-**V**alue. Imagine que temos um arquivo físico com diversas pastas e que cada pasta contém fichas ordenadas.
 
 O primeiro K é a chave de partição que o Cassandra usa para decidir em qual servidor (nó) o dado vai ser armazenado. Ela também determina a localização física do dado no disco do servidor. Na nossa analogia, esse K seria equivalente à etiqueta na frente da pasta, então teríamos pastas do tipo: 'Canal A', 'Canal B', 'Canal C' e etc, sendo que K seria o nome do canal.
 
