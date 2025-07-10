@@ -199,7 +199,7 @@ CREATE TABLE messages (
 
 O campo `bucket` é calculado com base no tempo. No caso do Discord, eles fizeram um estudo nos maiores servidores e perceberam que guardar os últimos 10 dias de mensagens seria o ideal para manter os buckets menores que 100MB e ainda assim garantir uma performance e quantidade de dados confortável. Com isso, em vez de uma única partição gigante para um canal, agora existem várias partições menores e gerenciáveis: `(canal_123, semana_1)`, `(canal_123, semana_2)`, etc.
 
-Isso mantém as partições pequenas, garantindo a performance e a estabilidade do cluster, com a pequena desvantagem de que a aplicação agora precisa consultar múltiplos buckets para carregar um histórico de mensagens muito antigo. Isso indica que os serividores pouco utilizados precisariam percorrer diversos buckets para coletar mensagens suficientes, mas isso é OK porque para servidores mais ativos a quantidade de mensagens suficientes é encontrada na primeira partição e esses servidores são maioria.
+Isso mantém as partições pequenas, garantindo a performance e a estabilidade do cluster, com a pequena desvantagem de que a aplicação agora precisa consultar múltiplos buckets para carregar um histórico de mensagens muito antigo. Isso indica que os serivores pouco utilizados precisariam percorrer diversos buckets para coletar mensagens suficientes, mas isso é OK porque para servidores mais ativos a quantidade de mensagens suficientes é encontrada na primeira partição e esses servidores são maioria.
 
 ### Subindo para produção
 
@@ -215,7 +215,7 @@ O Cassandra é um banco AP (do teorema CAP), o que significa que é um banco com
 
 Para entender o porquê da consistência eventual ser a causa desse problema, vamos entender como a inserção dos dados no Cassandra (complementar à descrição feita acima no tópico de compactação).
 
-O Cassandra faz um Upsert: inSERT se a tupla não existe e UPdata se ela existe. O Upsert é feito somente nas colunas, não atualizando a tupla inteira. Se o mesmo campo for atualizado concorrentemente, então a mudança com maior timestamp será mantida, implementando uma forma de "last-write-wins" por coluna.
+O Cassandra faz um Upsert: inSERT se a tupla não existe e UPdate se ela existe. O Upsert é feito somente nas colunas, não atualizando a tupla inteira. Se o mesmo campo for atualizado concorrentemente, então a mudança com maior timestamp será mantida, implementando uma forma de "last-write-wins" por coluna.
 
 [Artigo da empresa que mantém o Cassandra sobre a forma que o Cassandra faz o update de tuplas com "last-write-wins"](https://www.datastax.com/blog/why-cassandra-doesnt-need-vector-clocks)
 
@@ -295,3 +295,18 @@ Como visto nessa imagem, a performance obtida foi absurda. Os reads aconteceram 
 Anteriormente, foi dito que por conta da maneira que o Mongo armazenava as mensagens, era muito custoso buscar mensagens antigas pois seriam necessários muitos acessos aleatórios ao disco, uma vez que elas raramente estariam em cache. No gif a seguir, é mostrado como um jump-back de 1 ano de mensagens acontece de maneira extremamente rápida:
 
 ![Jump back de um ano](jump-back.gif)
+
+### A grande surpresa
+
+Tudo correu bem por cerca de 6 meses, até que "A grande surpresa" aconteceu. O sistema estava funcionando perfeitamente, até o dia em que o Cassandra simplesmente parou de responder.
+
+A equipe de engenharia notou que o Cassandra estava executando pausas de "stop-the-world" para Garbage Collection (GC) de 10 segundos constantemente, mas não havia uma causa aparente. Após investigarem, encontraram um canal do Discord que levava 20 segundos para carregar. O culpado era o servidor público do subreddit "Puzzles & Dragons". Como era um servidor público, os engenheiros entraram para investigar e, para sua surpresa, o canal continha apenas uma única mensagem.
+
+Nesse momento, ficou claro o que havia acontecido: os administradores do servidor haviam deletado milhões de mensagens usando a API do Discord, deixando apenas uma para trás.
+
+Como explicado anteriormente na seção sobre consistência eventual, o Cassandra lida com exclusões usando tombstones. Quando um usuário tentava carregar aquele canal, embora houvesse apenas uma mensagem visível, o Cassandra precisava escanear milhões de tombstones de mensagens, gerando uma quantidade de "lixo" (objetos a serem coletados pelo GC) muito maior do que a JVM conseguia processar, causando as longas pausas.
+
+A solução para este problema foi implementada em duas frentes:
+
+1.  **Redução do tempo de vida dos tombstones:** O tempo de vida padrão dos tombstones foi reduzido de 10 dias para 2 dias. Isso foi possível porque o Discord já executava reparos (um processo anti-entropia para garantir a consistência entre os nós) todas as noites no cluster de mensagens.
+2.  **Otimização da query:** O código da aplicação foi alterado para rastrear buckets vazios e evitá-los em consultas futuras para um mesmo canal. Isso significa que, se um usuário gerasse essa consulta novamente, na pior das hipóteses, o Cassandra escanearia apenas o bucket mais recente, em vez de todos os buckets que continham apenas tombstones.
