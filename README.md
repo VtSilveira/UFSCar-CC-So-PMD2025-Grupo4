@@ -80,7 +80,7 @@ Este projeto tem como objetivo entender esse questionamento.
 
 Em julho de 2016, foi anunciado que o discord armazenava 40 milhões de mensagens por dia. Em dezembro desse mesmo ano, o número mais que dobrou: 100 milhões. Segundo o artigo [How Discord Stores Billions of Messages](https://discord.com/blog/how-discord-stores-billions-of-messages), eles tomaram a decisão de projeto inicial de nunca apagar mensagens e chats, o que gera um enorme volume de dados. Como eles fazem isso? Cassandra!
 
-A escolha inicial pelo MongoDB se dá, indiscutivelmente segundo eles, pois esse ele permite escala de maneira rápida. Tudo foi guardado em um único replica set e isso foi intencional, tudo foi planejado para uma futura migração, pois eles também sabiam que não iam continuar com o mongo porque o sharding é complicado e não tem reputação muito boa em questões de estabilidade. Essa afirmação não foi justificada no artigo, mas em alguns fóruns da internet é possível ver essa discussão:
+A escolha inicial pelo MongoDB se dá, indiscutivelmente segundo eles, pois esse permite escala de maneira rápida. Tudo foi guardado em um único replica set e isso foi intencional, tudo foi planejado para uma futura migração, porque eles também sabiam que não iam continuar com o mongo, uma vez que, segundo eles, o sharding é complicado e não tem reputação muito boa em questões de estabilidade. Essa afirmação não foi justificada no artigo, mas em alguns fóruns da internet é possível ver essa discussão:
 
 - Nesse tópico do reddit, justamente sobre essa afirmação, é discutido esse ponto e um usuário encontra um artigo dizendo que na verdade o sharding do mongo é até melhor do que o do Cassandra. Outro diz que os 'old dev folks' tem preconceito com novas tecnologias como o MongoDB. [Reddit](https://www.reddit.com/r/mongodb/comments/f83ihc/mongodb_sharding_low_stability/)
 
@@ -92,7 +92,7 @@ Diante dessa análise, parece que essa afirmação no artigo não foi tão embas
 
 As mensagens eram armazenadas em uma coleção do Mongo com um único índice composto nos atributos channel_id e created_at. Essa escolha de índice se dá pelo seguinte principal motivo:
 
-- Uma conversa pertence à um canal (um grupo - normalmente chamado de servidor - ou um chat entre dois usuários, como na imagem abaixo) e elas possuem uma ordem de tempo nas imagens enviadas. Logo, para buscar as imagens rapidamente e de maneira ordenada, faz muito sentido criar um índice nesses campos. Como a seletividade das mensagens sempre será baixa (já que se uma conversa tiver 1 milhão de mensagens, ainda assim é somente 10% da quantidade de mensagens trocadas POR DIA em 2017), fazendo com que o índice sempre seja acessado.
+- Uma conversa pertence à um canal (um grupo - normalmente chamado de servidor - ou um chat entre dois usuários, como na imagem abaixo) e elas possuem uma ordem de tempo nas mensagens enviadas. Logo, para buscar as mensagens rapidamente e de maneira ordenada, faz muito sentido criar um índice nesses campos. Como a seletividade das mensagens sempre será baixa (já que se uma conversa tiver 1 milhão de mensagens - o que não é muito realista, ainda mais em 2015 quando o discord não era tão popular, ainda assim é somente 10% da quantidade total de mensagens armazenadas por volta do fim desse mesmo ano), o índice será utilizado para a grande maioria das queries.
 
 ![Conversa no discord](discord-chat.png)
 
@@ -102,9 +102,9 @@ Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de me
 
 - Os reads eram extremamente aleatórios e a proporção de reads/writes era por volta de 50/50.
 
-- Servidores discord focados principalmente em chat por voz eram um problema, já que pouquissimas mensagens eram trocadas e isso causava um problema conhecido: as poucas mensagens podem estar muito distantes fisicamente no disco, fazendo com sejam feitas muitas leituras aleatórias, o que é um dos principais gargalos de sistemas computacionais, já que é uma operação extremamente cara. Além disso, isso causa o que é conhecido como 'disk cache evictions':
+- Servidores discord focados principalmente em chat por voz eram um problema, já que pouquissimas mensagens eram trocadas e isso causava um problema conhecido: as poucas mensagens podem estar muito distantes fisicamente no disco, fazendo com sejam feitas muitas leituras aleatórias, o que é um dos principais gargalos de sistemas computacionais, já que é uma operação cara. Além disso, isso causa o que é conhecido como 'disk cache evictions':
 
-  - É o processo de remoção de dados do cache de disco (uma área rápida de memória) para dar lugar a novos dados. O problema ocorre quando dados raramente acessados (como mensagens antigas em chats inativos, ou mesmo as mensagens desses servidores onde os canais de chat são pouco utilizados) são lidos do disco e forçam a remoção de dados "quentes" (frequentemente acessados) do cache. Quando esses dados "quentes" são necessários novamente, eles precisam ser lidos do disco, que é uma operação lenta, causando degradação na performance e latências imprevisíveis.
+  - É o processo de remoção de dados do cache de disco (uma área rápida de memória) para dar lugar a novos dados. O problema ocorre quando dados raramente acessados (como mensagens antigas em chats inativos, ou mesmo as mensagens desses servidores onde os canais de chat são pouco utilizados) são lidos do disco e forçam a remoção de dados "quentes" (frequentemente acessados) do cache. Quando esses dados "quentes" são necessários novamente, eles precisam ser lidos do disco, que é uma operação lenta, causando degradação na performance e latências imprevisíveis. [Fonte](https://www.geeksforgeeks.org/system-design/cache-eviction-policies-system-design/)
 
 - Servidores médios que são mais focados em chat de mensagens não possuem esse problema em especifíco, mas acaba sendo similar uma vez que possuem poucos usuários, então as mensagens usualmente não estão em cache, sendo necessário acesso ao disco.
 
@@ -114,9 +114,9 @@ Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de me
 
 ### Requisitos definidos
 
-- Escalabilidade linear: Não queriam reconsiderar a solução ou precisar fazer 're-shard' dos dados
+- Escalabilidade linear: Não queriam reconsiderar a solução ou precisar fazer 're-shard' dos dados.
 
-- Recuperação automática: o Discord deveria se auto-recuperar o máximo possível
+- Recuperação automática: o Discord deveria se auto-recuperar o máximo possível.
 
 - Baixa manutenção: Deve funcionar depois da configuração. A única manutenção a ser realizada deve ser a de adicionar novos nós conforme os dados crescem.
 
@@ -206,7 +206,7 @@ CREATE TABLE messages (
 ) WITH CLUSTERING ORDER BY (message_id DESC);
 ```
 
-O campo `bucket` é calculado com base no tempo. No caso do Discord, eles fizeram um estudo nos maiores servidores e perceberam que guardar os últimos 10 dias de mensagens seria o ideal para manter os buckets menores que 100MB e ainda assim garantir uma performance e quantidade de dados confortável. Com isso, em vez de uma única partição gigante para um canal, agora existem várias partições menores e gerenciáveis: `(canal_123, semana_1)`, `(canal_123, semana_2)`, etc.
+No caso do Discord, o campo `bucket` é calculado com base no tempo. Eles fizeram um estudo nos maiores servidores e perceberam que guardar os últimos 10 dias de mensagens seria o ideal para manter os buckets menores que 100MB e ainda assim garantir uma performance e quantidade de dados confortável. Com isso, em vez de uma única partição gigante para um canal, agora existem várias partições menores e gerenciáveis: `(canal_123, semana_1)`, `(canal_123, semana_2)`, etc.
 
 Isso mantém as partições pequenas, garantindo a performance e a estabilidade do cluster, com a pequena desvantagem de que a aplicação agora precisa consultar múltiplos buckets para carregar um histórico de mensagens muito antigo. Isso indica que os serivores pouco utilizados precisariam percorrer diversos buckets para coletar mensagens suficientes, mas isso é OK porque para servidores mais ativos a quantidade de mensagens suficientes é encontrada na primeira partição e esses servidores são maioria.
 
@@ -277,7 +277,7 @@ Eles pensaram em duas soluções para esse problema:
 
 Eles escolheram a segunda abordagem e escolheram o campo author_id para ser o ponto de decisão se uma mensagem está corrompida ou não.
 
-Ao resolverem esse problema, eles perceberam que estavam sendo ineficientes com seus writes. Como já citado anteriormente, ao deletar um registro, cria-se uma tombstone. O motivo disso é principalmente para manter a consistência individual, já que um registro deletado pode ressucitar no seguinte cenário (Cada [A] significa o dado A em um certo nó []):
+Ao resolverem esse problema, eles perceberam que estavam sendo ineficientes com seus writes. Como já citado anteriormente, ao deletar um registro, cria-se uma tombstone. O motivo disso é principalmente para manter a consistência individual, já que um registro deletado pode ressucitar no seguinte cenário (Cada [A] significa o dado A em um certo nó [ ]):
 
 - Situação inicial: [A][A][A]
 - Delete A é enviado ao primeiro nó e propagado aos demais: [] -> [] -/ [A]. O último nó ainda não recebeu o delete por conta de qualquer problema de comunicação entre eles.
