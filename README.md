@@ -76,11 +76,28 @@ Além da pura quantidade de mensagens armazenadas, existem outros fatores que mo
 
 Este projeto tem como objetivo entender esse questionamento.
 
-## 4. Migração para o Cassandra (2017)
+## 3. Escolha do MongoDB(2015-2016)
 
-Em julho de 2016, foi anunciado que o discord armazenava 40 milhões de mensagens por dia. Em dezembro desse mesmo ano, o número mais que dobrou: 100 milhões. Segundo o artigo [How Discord Stores Billions of Messages](https://discord.com/blog/how-discord-stores-billions-of-messages), eles tomaram a decisão de projeto inicial de nunca apagar mensagens e chats, o que gera um enorme volume de dados. Como eles fazem isso? Cassandra!
+O trecho, em todo o artigo “How Discord Stores Billions of Messages”, que melhor resume o motivo de terem adotado o MongoDB no início do projeto é: "Nós não temos engenheiros de DevOps”.[Discord Blog – How Discord Stores Billions of Messages](https://discord.com/blog/how-discord-stores-billions-of-messages)
 
-A escolha inicial pelo MongoDB se dá, indiscutivelmente segundo eles, pois esse permite escala de maneira rápida. Tudo foi guardado em um único replica set e isso foi intencional, tudo foi planejado para uma futura migração, porque eles também sabiam que não iam continuar com o mongo, uma vez que, segundo eles, o sharding é complicado e não tem reputação muito boa em questões de estabilidade. Essa afirmação não foi justificada no artigo, mas em alguns fóruns da internet é possível ver essa discussão:
+Diante deste resumo, é bem fácil entender o principal motivo pelo o qual os primeiros desenvolvedores do Discord optaram pelo o MongoDB como banco de dados. Eles simplesmente acreditaram que este seria o mais fácil de usar e o com que teriam a menor quantidade de dor de cabeça possível. Stanislav Vishnevskiy, Diretor de Tecnologia e Co-fundador do Discord, explica que eles apenas queriam entregar uma primeira versão do aplicativo, ou seja, o mais importante para eles, naquele momento, era velocidade de implementação e uma performance razoável, não precisavam de um sistema absolutamente robusto e performático, apenas velocidade e pouca dor de cabeça!
+
+Em 2015, em apenas 60 dias, os primeiros devs criaram a primeira versão do Discord e o MongoDB, sendo um banco de documentos flexível, permitia salvar estruturas complexas sem definição rígida de esquema, facilitando a iteração veloz. Além disso, mensagens, usuários e canais eram naturalmente representados como documentos JSON, encaixando-se bem no modelo do MongoDB e tornando o acesso e a manipulação dos dados grandes simples e intuitivos, o que também contribuiu para o desenvolvimento rápido.
+
+Neste primeiro momento do desenvolvimento, todas as mensagens eram armazenadas em um único replica set do MongoDB, ou seja, todas as mensagens ficavam centralizadas em um único conjunto de servidores com replicação automática. A ideia era manter a arquitetura simples e facilitar o desenvolvimento rápido, mesmo sabendo que, com o tempo, seria necessário escalar e repensar essa estrutura. Dessa forma, eles conseguiram manter, já no começo do desenvolvimento, boa disponibilidade e redundância, mas escolheram não distribuir os dados horizontalmente.
+
+#### ⚠️ O que é sharding?⚠️
+
+Para o melhor entendimento dos próximos tópicos, é bom refrescar a memória e entender o que é Sharding!
+Sharding é uma técnica de particionamento de dados em que um banco divide grandes volumes de informações em partes menores chamadas shards, distribuídas entre diferentes servidores. Cada shard contém apenas uma fração dos dados totais, e o sistema precisa decidir onde armazenar e como consultar cada pedaço. Essa abordagem melhora a escalabilidade horizontal, mas adiciona complexidade à arquitetura, exigindo regras específicas para roteamento, consistência e manutenção dos dados.
+
+![Sharding](sharding.jpg)
+
+Fonte: [Documentação do MongoDB](https://www.mongodb.com/resources/products/capabilities/database-sharding-explained)
+
+Eles ativamente optaram por não usar a função de sharding do MongoDB. O primeiro motivo que explica essa decisão já foi posto aqui: eles não queriam dor de cabeça. O autor do artigo explica, como também já foi mencionado aqui, que eles não possuíam nenhum engenheiro de DevOps. Nesse sentido, eles entendiam que o Sharding era complicado de usar e também não era muito conhecido por estabilidade, o que em meados de 2015 era muito aceitável de dizer.
+
+Segundo eles, o sharding era complicado e não tinha reputação muito boa em questões de estabilidade. Essa afirmação não foi justificada no artigo, mas em alguns fóruns da internet é possível ver essa discussão:
 
 - Nesse tópico do reddit, justamente sobre essa afirmação, é discutido esse ponto e um usuário encontra um artigo dizendo que na verdade o sharding do mongo é até melhor do que o do Cassandra. Outro diz que os 'old dev folks' tem preconceito com novas tecnologias como o MongoDB. [Reddit](https://www.reddit.com/r/mongodb/comments/f83ihc/mongodb_sharding_low_stability/)
 
@@ -88,15 +105,31 @@ A escolha inicial pelo MongoDB se dá, indiscutivelmente segundo eles, pois esse
 
 - [Este artigo do próprio Mongo](https://www.mongodb.com/resources/products/platform/demystifying-sharding-mongodb) tem o objetivo de desmistificar o sharding no Mongo explicando como ele funciona e como fazer.
 
-Diante dessa análise, parece que essa afirmação no artigo não foi tão embasada e o sharding em si não entra como um fator decisivo na migração de tecnologia, e sim os pontos que serão discutidos a seguir, na seção "Requisitos Definidos". É importante mencionar que essa migração começou em 2015/2016 e o Mongo evoluiu muito desde então.
+Diante dessa análise, parece que essa afirmação no artigo não foi tão embasada e o sharding em si não entra como um fator decisivo na migração de tecnologia É importante mencionar que essa migração começou em 2015/2016 e o Mongo evoluiu muito desde então.
 
-As mensagens eram armazenadas em uma coleção do Mongo com um único índice composto nos atributos channel_id e created_at. Essa escolha de índice se dá pelo seguinte principal motivo:
+Uma outra razão pela qual os fizeram escolher fugir do sharding e usar apenas uma única replica set é que eles estavam cientes de suas limitações técnicas naquele momento, então essas duas escolhas foram propositais não só por simplicidade, mas também porque facilitariam muito a migração futura. Eles já sabiam que o MongoDB não daria conta da escala futura, e projetaram sua arquitetura de forma a evitar problemas quando chegasse a hora de mudar. [Discord Blog – How Discord Stores Billions of Messages](https://discord.com/blog/how-discord-stores-billions-of-messages)
+
+Evitar o sharding no início e manter todos os dados concentrados em um único replica set deixou a arquitetura do Discord mais simples, previsível e fácil de mover. Quando se usa sharding, os dados ficam espalhados por múltiplos servidores, com regras específicas para particionamento, roteamento de consultas e consistência entre shards. Isso tudo dificulta a exportação dos dados e também não contribui para a simplicidade do sistema. Já com um replica set único, os dados estão centralizados, a estrutura é mais próxima de um banco relacional ou de outro NoSQL tradicional, e as consultas são mais diretas. Isso permitiu que a equipe do Discord planejasse uma migração gradual desde o princípio.
+
+### O começo do fim
+
+Até cerca de 100 milhões de mensagens em novembro de 2015, a performance era muito aceitável e realmente cumpriu o desejo inicial dos devs de causar pouca dor de cabeça. O uso de um índice composto mantinha a consulta de mensagens recentes bem eficiente.
+
+As mensagens, neste ponto, eram armazenadas em uma coleção do Mongo com um único índice composto nos atributos channel_id e created_at. Essa escolha de índice se dá pelo seguinte principal motivo:
 
 - Uma conversa pertence à um canal (um grupo - normalmente chamado de servidor - ou um chat entre dois usuários, como na imagem abaixo) e elas possuem uma ordem de tempo nas mensagens enviadas. Logo, para buscar as mensagens rapidamente e de maneira ordenada, faz muito sentido criar um índice nesses campos. Como a seletividade das mensagens sempre será baixa (já que se uma conversa tiver 1 milhão de mensagens - o que não é muito realista, ainda mais em 2015 quando o discord não era tão popular, ainda assim é somente 10% da quantidade total de mensagens armazenadas por volta do fim desse mesmo ano), o índice será utilizado para a grande maioria das queries.
 
 ![Conversa no discord](discord-chat.png)
 
-Por volta de novembro de 2015, o discord alcançou a marca de 100 milhões de mensagens armazenadas e foi nesse momento que eles perceberam os problemas esperados acontecendo: os dados e os índices já não cabiam mais na memória principal e as latências se tornaram imprevisiveís. Para resolver esse problema, poderia-se implementar o sharding do próprio Mongo, mas como foi discutido anteriormente (posteriormente também veremos outros motivos que também influenciaram a decisão tomada pelos engenheiros do Discord), essa não era uma opção.
+Contudo, quando as mensagens começaram a passar das 100 milhões em Novembro de 2015, o conjunto de dados excedeu a capacidade de memória disponível, os dados e os índices já não cabiam mais na memória RAM, o que forçava o acesso direto ao disco, que, por sua vez, acabou degradando muito a latência e a experiência do usuário. [Linkedin](https://www.linkedin.com/pulse/discords-journey-from-mongodb-cassandra-ankit-shaw/)
+
+Esse foi o estopim para o que podemos chamar de começo do fim do MongoDB no Discord. A latência ficou imprevisível, especialmente em horários de pico, e a equipe logo percebeu que o sistema já não atendia mais aos níveis de desempenho necessários para manter uma experiência fluida de chat.
+
+Diante deste cenário, os devs do Discord perceberam que finalmente havia chegado o momento de começar a migração de banco de dados, o qual estavam se preparando desde o princípio do projeto.
+
+## 4. Migração para o Cassandra (2017)
+
+Em julho de 2016, foi anunciado que o discord armazenava 40 milhões de mensagens por dia. Em dezembro desse mesmo ano, o número mais que dobrou: 100 milhões. Segundo o artigo [How Discord Stores Billions of Messages](https://discord.com/blog/how-discord-stores-billions-of-messages), eles tomaram a decisão de projeto inicial de nunca apagar mensagens e chats, o que gera um enorme volume de dados. Como eles fazem isso? Cassandra!
 
 ### Padrões de Leitura/Escrita e problemas com a arquitetura atual
 
@@ -319,3 +352,127 @@ A solução para este problema foi implementada em duas frentes:
 
 1.  **Redução do tempo de vida dos tombstones:** O tempo de vida padrão dos tombstones foi reduzido de 10 dias para 2 dias. Isso foi possível porque o Discord já executava reparos (um processo anti-entropia para garantir a consistência entre os nós) todas as noites no cluster de mensagens.
 2.  **Otimização da query:** O código da aplicação foi alterado para rastrear buckets vazios e evitá-los em consultas futuras para um mesmo canal. Isso significa que, se um usuário gerasse essa consulta novamente, na pior das hipóteses, o Cassandra escanearia apenas o bucket mais recente, em vez de todos os buckets que continham apenas tombstones.
+
+## 5. Migração para o ScyllaDB (2023)
+
+Com o passar dos anos, o Discord continuou a crescer exponencialmente, atingindo a marca de trilhões de mensagens armazenadas e uma base de usuários cada vez mais ativa. O sistema baseado em Cassandra, que havia sido uma solução robusta para a fase dos “bilhões de mensagens”, começou a apresentar limitações severas diante do novo patamar de escala e exigências operacionais.
+
+### Novos Desafios: O Limite do Cassandra
+
+No início de 2022, o cluster de mensagens do Discord rodava com 177 nós Cassandra, armazenando trilhões de mensagens. Apesar de toda a engenharia investida, a equipe enfrentava problemas recorrentes:
+
+- **Latência imprevisível:** A latência das operações variava de 5 ms a picos de 125 ms, especialmente em momentos de tráfego intenso ou durante operações de manutenção. Isso dificultava o cumprimento do SLA interno de respostas rápidas e impactava diretamente a experiência do usuário.
+- **Manutenção custosa:** Operações como compactação de SSTables exigiam intervenções manuais frequentes, incluindo a chamada “dança da fofoca” (remover nós da rotação para compactação e reintegrá-los depois). Esse processo era trabalhoso e arriscado, pois qualquer erro poderia afetar a disponibilidade do serviço.
+- **Partições quentes (_hot partitions_):** Em bancos de dados distribuídos, uma "hot partition" ocorre quando uma partição específica recebe um volume desproporcional de tráfego, sobrecarregando um nó do cluster e impactando a latência global do sistema. No caso do Discord, canais muito populares ou eventos como menções em massa (@everyone) geravam esse tipo de situação, concentrando milhares de requisições simultâneas em uma única partição e tornando esse um desafio típico em sistemas de mensageria massiva.
+- **Pausas de Garbage Collection (GC):** Por ser implementado em Java, o Cassandra sofria com pausas de GC (“stop-the-world”) que podiam chegar a 10 segundos, afetando a disponibilidade e previsibilidade do sistema. Essas pausas eram agravadas pelo acúmulo de tombstones — marcadores de exclusão criados quando um dado é deletado em bancos baseados em LSM-tree, como o Cassandra e o ScyllaDB. O excesso desses marcadores pode degradar a performance e travar operações de compactação e migração — além do volume massivo de dados.
+- **Compactação ineficiente:** O processo de compactação, fundamental para manter a performance de leitura em bancos baseados em LSM-tree (Log-Structured Merge-Tree, uma estrutura de dados que prioriza escritas rápidas em memória e posterior flush para disco, com compactação periódica), tornava-se cada vez mais custoso à medida que o volume de dados crescia. Em alguns casos, a compactação de partições com muitos tombstones podia travar a operação do cluster.
+
+Esses problemas não eram exclusivos do cluster de mensagens, mas se manifestavam de forma mais grave devido ao volume e ao padrão de acesso do Discord. A equipe buscava uma solução que permitisse escalar de forma sustentável, reduzisse custos operacionais e garantisse performance estável mesmo sob cargas extremas.
+
+### Avaliação e Escolha do ScyllaDB
+
+Diante desse cenário, o Discord avaliou alternativas e decidiu migrar para o **ScyllaDB**, um banco de dados compatível com Cassandra, mas reescrito em C++ e com arquitetura baseada em _shard-per-core_ (cada núcleo físico do servidor opera de forma isolada, reduzindo contenção e maximizando o uso de hardware moderno).
+
+As principais motivações para a escolha do ScyllaDB foram:
+
+- **Eliminação das pausas de GC:** Por não depender da JVM, o ScyllaDB não sofre com pausas de coleta de lixo, garantindo latências mais estáveis.
+- **Isolamento de carga:** O modelo _shard-per-core_ — arquitetura em que cada núcleo físico do processador opera como um shard independente, processando requisições de forma isolada e paralela, maximizando o uso do hardware e evitando contenção de recursos — permite que cada núcleo processe suas próprias requisições, evitando que partições quentes impactem o cluster inteiro. Isso é especialmente relevante para workloads com picos localizados, como grandes servidores do Discord.
+- **Desempenho superior:** Testes internos mostraram que o ScyllaDB oferecia latências menores e throughput maior, especialmente em operações de leitura reversa (essencial para buscar mensagens mais antigas). O suporte a consultas reversas otimizadas foi um diferencial importante, já que o padrão de acesso do Discord frequentemente exige "scroll back" em grandes volumes de mensagens.
+- **Facilidade de manutenção:** Operações como compactação e reparo são mais rápidas e menos intrusivas. O ScyllaDB também oferece ferramentas de monitoramento e automação mais modernas.
+- **Escalabilidade e eficiência:** Após a migração, foi possível reduzir o número de nós de 177 para 72, com cada nó suportando 9 TB (vs. 4 TB anteriormente), o que representa um ganho significativo em eficiência operacional e redução de custos.
+
+Antes de migrar o cluster principal de mensagens, o Discord testou o ScyllaDB em outros clusters menores, ajustando configurações e colaborando com a equipe do ScyllaDB para otimizar consultas reversas, que eram um gargalo inicial. Esse processo de validação gradual é uma prática recomendada em migrações de sistemas críticos.
+
+### O modelo _shard-per-core_ do ScyllaDB: conceito, vantagens e benchmarks
+
+O ScyllaDB diferencia-se do Cassandra principalmente por sua arquitetura _shard-per-core_. Nesse modelo, cada núcleo físico do processador (core) é responsável por um shard independente dentro do mesmo nó, processando requisições de forma isolada e paralela. Isso elimina a necessidade de locks globais, reduz a contenção de recursos e permite que o banco de dados aproveite ao máximo o hardware moderno, especialmente em servidores com muitos núcleos e arquitetura NUMA. Cada shard possui sua própria thread, memória e filas de requisições, tornando o processamento mais previsível e eficiente.
+
+**Vantagens do modelo shard-per-core:**
+
+- Aproveitamento máximo do paralelismo do hardware, escalando linearmente com o número de núcleos.
+- Redução drástica da contenção de recursos e eliminação de locks globais.
+- Latência mais estável e previsível, mesmo sob cargas elevadas.
+- Isolamento de falhas: problemas em um shard não afetam os demais.
+- Menor overhead de contexto e gerenciamento de threads.
+- Eficiência energética e melhor utilização de cache de CPU.
+- Operações de manutenção (compactação, reparo) podem ser distribuídas entre shards, acelerando processos críticos.
+
+**Benchmarks comparativos: ScyllaDB vs Cassandra**
+
+| Métrica                   | ScyllaDB (shard-per-core) | Cassandra (tradicional) |
+| ------------------------- | :-----------------------: | :---------------------: |
+| Throughput (ops/s)        |           1.2M            |          300k           |
+| Latência p99 de leitura   |           2 ms            |          20 ms          |
+| Latência p99 de escrita   |          1.5 ms           |          15 ms          |
+| Uso de CPU                |          80–90%           |         40–60%          |
+| Eficiência energética     |           Alta            |          Média          |
+| Escalabilidade horizontal |          Linear           |        Sublinear        |
+| Overhead de manutenção    |           Baixo           |          Alto           |
+
+_Fontes: [ScyllaDB vs Cassandra Performance Comparison](https://www.datasciencecentral.com/scylla-vs-cassandra-performance-comparison/), [ScyllaDB Benchmarks](https://www.scylladb.com/product/benchmarks/), [ScyllaDB vs Apache Cassandra](https://www.scylladb.com/compare/scylladb-vs-apache-cassandra/)_
+
+### Serviços de Dados em Rust: Protegendo o Banco de Dados
+
+Mesmo com a migração para o ScyllaDB, um desafio persistia: o padrão de acesso do Discord gerava picos de tráfego concentrados em determinados canais, especialmente durante grandes anúncios ou menções em massa (@everyone). Para mitigar o risco de _hot partitions_, a equipe desenvolveu uma nova camada intermediária chamada **serviços de dados** (_data services_), implementada em Rust.
+
+Esses serviços atuam como um “buffer inteligente” entre a API do Discord e o banco de dados, com as seguintes funções:
+
+- **Coalescência de requisições:** Se múltiplos usuários solicitam a mesma mensagem ou conjunto de mensagens simultaneamente, o serviço agrupa as requisições idênticas em uma única consulta ao banco, retornando o resultado para todos. Essa técnica, chamada coalescência de requisições, reduz drasticamente a concorrência no banco de dados e otimiza o acesso, sendo especialmente útil para workloads massivos e para evitar sobrecarga em partições quentes.
+- **Roteamento consistente:** Utilizando hash do `channel_id`, todas as requisições para um mesmo canal são direcionadas para a mesma instância do serviço, evitando concorrência descontrolada e protegendo o banco de dados de sobrecarga. Esse padrão de roteamento é fundamental para garantir isolamento e previsibilidade de performance.
+- **Concorrência segura:** O uso de Rust e do ecossistema Tokio permite alta performance e segurança em operações assíncronas, sem os riscos de concorrência típicos de linguagens como Java ou C++. O Rust foi escolhido por sua segurança de memória, performance próxima ao C++ e excelente suporte a programação concorrente.
+- **Comunicação eficiente:** Os serviços utilizam gRPC para comunicação entre si e com a API, garantindo baixa latência e escalabilidade horizontal.
+
+Essa arquitetura foi fundamental para garantir que, mesmo em eventos de tráfego extremo (como a final da Copa do Mundo de 2022, que gerou nove picos de mensagens em minutos), o sistema permanecesse estável e responsivo. O conceito de coalescência de requisições é uma técnica avançada de otimização para workloads massivos e pode ser estudado em sistemas de cache e filas distribuídas.
+
+### O Processo de Migração
+
+A migração de trilhões de mensagens do Cassandra para o ScyllaDB foi um desafio técnico de grande escala, com requisitos de zero downtime e validação rigorosa dos dados.
+
+O processo envolveu:
+
+1. **Provisionamento do novo cluster:** O ScyllaDB foi configurado com SSDs locais e RAID para maximizar desempenho e durabilidade. O uso de SSDs é fundamental para workloads de leitura intensiva e grandes volumes de dados.
+2. **Gravação duplicada:** Durante a transição, novas mensagens eram gravadas tanto no Cassandra quanto no ScyllaDB, garantindo consistência e permitindo rollback em caso de falhas.
+3. **Ferramenta de migração em Rust:** Inicialmente, a migração seria feita com Spark, mas a equipe desenvolveu uma ferramenta própria em Rust, capaz de migrar até 3,2 milhões de mensagens por segundo, reduzindo o tempo estimado de migração de três meses para apenas nove dias. O uso de SQLite para validação local durante a migração foi uma escolha pragmática para garantir integridade dos dados.
+4. **Validação automática:** Uma fração das leituras era comparada entre os dois bancos para garantir integridade. Esse tipo de validação cruzada é essencial em migrações de sistemas críticos.
+5. **Resolução de tombstones:** A migração travou nos últimos 0,0001% dos dados devido a intervalos massivos de tombstones não compactados no Cassandra. Após compactação manual desses intervalos, a migração foi concluída com sucesso. O acúmulo de tombstones é um problema conhecido em bancos baseados em LSM-tree e pode ser estudado em artigos sobre "Cassandra tombstone compaction".
+
+### Mudanças na Modelagem de Dados e Otimizações
+
+Curiosamente, a migração para o ScyllaDB não exigiu mudanças no esquema de dados principal. O modelo de partição por `(channel_id, bucket)` e ordenação por `message_id DESC` foi mantido, pois já estava otimizado para o padrão de acesso do Discord. No entanto, o ScyllaDB trouxe otimizações nativas, como suporte eficiente a consultas reversas e melhor distribuição de carga entre os shards.
+
+Além disso, os serviços de dados permitiram mitigar o problema das hot partitions sem alterar a modelagem, ao agrupar e roteirizar requisições de forma inteligente. Isso demonstra a importância de soluções arquiteturais além do banco de dados em si.
+
+### Resultados Obtidos
+
+A migração para o ScyllaDB trouxe ganhos expressivos:
+
+- **Redução de infraestrutura:** O número de nós caiu de 177 (Cassandra) para 72 (ScyllaDB), com cada nó suportando 9 TB (vs. 4 TB anteriormente).
+- **Latência drasticamente menor:** A latência p99 de leitura caiu de 40–125 ms para 15 ms; a de escrita estabilizou em 5 ms.
+- **Menor custo operacional:** Menos nós, menos manutenção manual e maior previsibilidade.
+- **Resiliência comprovada:** O sistema suportou picos globais de tráfego sem degradação perceptível, como evidenciado durante a Copa do Mundo de 2022.
+- **Escalabilidade sustentável:** O novo sistema permite crescer horizontalmente com adição de nós, mantendo performance estável.
+
+Esses resultados são corroborados por métricas apresentadas publicamente pela equipe do Discord e por relatos de outros grandes usuários do ScyllaDB, como Netflix e Apple.
+
+### Conceitos Técnicos Fundamentais
+
+Para compreender a fundo as decisões do Discord, é importante detalhar alguns conceitos:
+
+- **Hot Partition:** Partição que recebe tráfego desproporcional, sobrecarregando um nó e impactando a latência global. No Discord, grandes servidores ou eventos (@everyone) são fontes típicas desse problema.
+- **Tombstones:** Marcadores de exclusão em bancos baseados em LSM-tree. O acúmulo excessivo pode degradar a performance e travar operações de compactação e migração.
+- **LSM-Tree:** Estrutura de dados que prioriza escrita rápida em memória (memtable) e posterior flush para disco (SSTables), com compactação periódica. Essencial para bancos como Cassandra e ScyllaDB.
+- **Shard-per-Core:** Arquitetura do ScyllaDB onde cada núcleo físico opera como um shard isolado, maximizando o uso do hardware e evitando contenção.
+- **Coalescência de Requisições:** Técnica de agrupar múltiplas requisições idênticas para reduzir concorrência e otimizar acesso ao banco.
+
+### Considerações Finais e Lições Aprendidas
+
+A jornada do Discord ilustra a necessidade de evolução contínua em sistemas de processamento massivo de dados. O que era suficiente para bilhões de mensagens tornou-se insuficiente diante de trilhões. A migração para o ScyllaDB, aliada à criação dos serviços de dados em Rust, permitiu ao Discord atingir um novo patamar de escala, performance e confiabilidade.
+
+**Lições importantes:**
+
+- **Monitoramento e automação são essenciais:** O sucesso da migração e da operação contínua dependeu de validação automatizada, reparos noturnos e monitoramento proativo.
+- **Adoção de tecnologias modernas:** O uso de Rust e ScyllaDB mostrou-se decisivo para superar limitações de soluções anteriores.
+- **Desafios futuros:** Apesar dos avanços, o Discord reconhece que novas ordens de magnitude trarão novos desafios, como _tiered storage_ (armazenamento em camadas) e sharding automático para clusters multi-TB por nó. Estratégias como uso de S3 para mensagens antigas ou Bloom filters para otimizar buscas por tombstones são discutidas na comunidade e podem ser exploradas em trabalhos futuros.
+- **Evitar vendor lock-in:** A dependência de soluções específicas (como ScyllaDB) é um risco a ser monitorado, e alternativas devem ser avaliadas periodicamente.
+
+---
