@@ -355,17 +355,22 @@ A solução para este problema foi implementada em duas frentes:
 
 ## 5. Migração para o ScyllaDB (2023)
 
-Com o passar dos anos, o Discord continuou a crescer exponencialmente, atingindo a marca de trilhões de mensagens armazenadas e uma base de usuários cada vez mais ativa. O sistema baseado em Cassandra, que havia sido uma solução robusta para a fase dos “bilhões de mensagens”, começou a apresentar limitações severas diante do novo patamar de escala e exigências operacionais.
+Com o passar dos anos, o Discord continuou a crescer exponencialmente, atingindo a marca de trilhões de mensagens armazenadas e uma base de usuários cada vez mais ativa. O sistema baseado em Cassandra, que havia sido uma solução robusta para a fase dos "bilhões de mensagens", começou a apresentar limitações severas diante do novo patamar de escala e exigências operacionais.
 
 ### Novos Desafios: O Limite do Cassandra
 
 No início de 2022, o cluster de mensagens do Discord rodava com 177 nós Cassandra, armazenando trilhões de mensagens. Apesar de toda a engenharia investida, a equipe enfrentava problemas recorrentes:
 
 - **Latência imprevisível:** A latência das operações variava de 5 ms a picos de 125 ms, especialmente em momentos de tráfego intenso ou durante operações de manutenção. Isso dificultava o cumprimento do SLA interno de respostas rápidas e impactava diretamente a experiência do usuário.
-- **Manutenção custosa:** Operações como compactação de SSTables exigiam intervenções manuais frequentes, incluindo a chamada “dança da fofoca” (remover nós da rotação para compactação e reintegrá-los depois). Esse processo era trabalhoso e arriscado, pois qualquer erro poderia afetar a disponibilidade do serviço.
+- **Manutenção custosa:** Operações como compactação de SSTables exigiam intervenções manuais frequentes, incluindo a chamada "dança da fofoca" (remover nós da rotação para compactação e reintegrá-los depois). Esse processo era trabalhoso e arriscado, pois qualquer erro poderia afetar a disponibilidade do serviço.
 - **Partições quentes (_hot partitions_):** Em bancos de dados distribuídos, uma "hot partition" ocorre quando uma partição específica recebe um volume desproporcional de tráfego, sobrecarregando um nó do cluster e impactando a latência global do sistema. No caso do Discord, canais muito populares ou eventos como menções em massa (@everyone) geravam esse tipo de situação, concentrando milhares de requisições simultâneas em uma única partição e tornando esse um desafio típico em sistemas de mensageria massiva.
-- **Pausas de Garbage Collection (GC):** Por ser implementado em Java, o Cassandra sofria com pausas de GC (“stop-the-world”) que podiam chegar a 10 segundos, afetando a disponibilidade e previsibilidade do sistema. Essas pausas eram agravadas pelo acúmulo de tombstones — marcadores de exclusão criados quando um dado é deletado em bancos baseados em LSM-tree, como o Cassandra e o ScyllaDB. O excesso desses marcadores pode degradar a performance e travar operações de compactação e migração — além do volume massivo de dados.
-- **Compactação ineficiente:** O processo de compactação, fundamental para manter a performance de leitura em bancos baseados em LSM-tree (Log-Structured Merge-Tree, uma estrutura de dados que prioriza escritas rápidas em memória e posterior flush para disco, com compactação periódica), tornava-se cada vez mais custoso à medida que o volume de dados crescia. Em alguns casos, a compactação de partições com muitos tombstones podia travar a operação do cluster.
+- **Pausas de Garbage Collection (GC):** Por ser implementado em Java, o Cassandra sofria com pausas de GC ("stop-the-world") que podiam chegar a 10 segundos, afetando a disponibilidade e previsibilidade do sistema. Essas pausas eram agravadas pelo acúmulo de tombstones — marcadores de exclusão criados quando um dado é deletado em bancos baseados em LSM-tree, como o Cassandra e o ScyllaDB. O excesso desses marcadores pode degradar a performance e travar operações de compactação e migração — além do volume massivo de dados.
+- **Compactação ineficiente:** O processo de compactação, fundamental para manter a performance de leitura em bancos baseados em **LSM-tree** (Log-Structured Merge-Tree), tornava-se cada vez mais custoso à medida que o volume de dados crescia. A LSM-tree é uma estrutura que organiza os dados de forma otimizada para escrita rápida, exigindo posteriormente uma reorganização periódica no disco (compactação). Em alguns casos, a compactação de partições com muitos tombstones podia travar a operação do cluster.
+
+**Para saber mais sobre compactação em bancos LSM-tree:**
+
+- [LSM-tree database compaction strategies (Medium)](https://medium.com/@rastogi.shivank16/lsm-tree-database-compaction-strategies-when-to-use-size-tiered-leveled-or-time-windowed-f40b5f839e3c)
+- [Log-Structured Merge-Tree (ScyllaDB Glossary)](https://www.scylladb.com/glossary/log-structured-merge-tree/)
 
 Esses problemas não eram exclusivos do cluster de mensagens, mas se manifestavam de forma mais grave devido ao volume e ao padrão de acesso do Discord. A equipe buscava uma solução que permitisse escalar de forma sustentável, reduzisse custos operacionais e garantisse performance estável mesmo sob cargas extremas.
 
@@ -376,7 +381,7 @@ Diante desse cenário, o Discord avaliou alternativas e decidiu migrar para o **
 As principais motivações para a escolha do ScyllaDB foram:
 
 - **Eliminação das pausas de GC:** Por não depender da JVM, o ScyllaDB não sofre com pausas de coleta de lixo, garantindo latências mais estáveis.
-- **Isolamento de carga:** O modelo _shard-per-core_ — arquitetura em que cada núcleo físico do processador opera como um shard independente, processando requisições de forma isolada e paralela, maximizando o uso do hardware e evitando contenção de recursos — permite que cada núcleo processe suas próprias requisições, evitando que partições quentes impactem o cluster inteiro. Isso é especialmente relevante para workloads com picos localizados, como grandes servidores do Discord.
+- **Isolamento de carga:** O modelo _shard-per-core_ permite que cada núcleo físico do processador processe suas próprias requisições de forma isolada e paralela, evitando que partições quentes impactem o cluster inteiro. Isso é especialmente relevante para workloads com picos localizados, como grandes servidores do Discord.
 - **Desempenho superior:** Testes internos mostraram que o ScyllaDB oferecia latências menores e throughput maior, especialmente em operações de leitura reversa (essencial para buscar mensagens mais antigas). O suporte a consultas reversas otimizadas foi um diferencial importante, já que o padrão de acesso do Discord frequentemente exige "scroll back" em grandes volumes de mensagens.
 - **Facilidade de manutenção:** Operações como compactação e reparo são mais rápidas e menos intrusivas. O ScyllaDB também oferece ferramentas de monitoramento e automação mais modernas.
 - **Escalabilidade e eficiência:** Após a migração, foi possível reduzir o número de nós de 177 para 72, com cada nó suportando 9 TB (vs. 4 TB anteriormente), o que representa um ganho significativo em eficiência operacional e redução de custos.
@@ -386,6 +391,8 @@ Antes de migrar o cluster principal de mensagens, o Discord testou o ScyllaDB em
 ### O modelo _shard-per-core_ do ScyllaDB: conceito, vantagens e benchmarks
 
 O ScyllaDB diferencia-se do Cassandra principalmente por sua arquitetura _shard-per-core_. Nesse modelo, cada núcleo físico do processador (core) é responsável por um shard independente dentro do mesmo nó, processando requisições de forma isolada e paralela. Isso elimina a necessidade de locks globais, reduz a contenção de recursos e permite que o banco de dados aproveite ao máximo o hardware moderno, especialmente em servidores com muitos núcleos e arquitetura NUMA. Cada shard possui sua própria thread, memória e filas de requisições, tornando o processamento mais previsível e eficiente.
+
+> NUMA (Non-Uniform Memory Access) é uma arquitetura em que cada processador acessa mais rapidamente sua própria memória local do que a memória de outros processadores, otimizando o desempenho em servidores com múltiplos núcleos.
 
 **Vantagens do modelo shard-per-core:**
 
@@ -399,15 +406,14 @@ O ScyllaDB diferencia-se do Cassandra principalmente por sua arquitetura _shard-
 
 **Benchmarks comparativos: ScyllaDB vs Cassandra**
 
-| Métrica                   | ScyllaDB (shard-per-core) | Cassandra (tradicional) |
-| ------------------------- | :-----------------------: | :---------------------: |
-| Throughput (ops/s)        |           1.2M            |          300k           |
-| Latência p99 de leitura   |           2 ms            |          20 ms          |
-| Latência p99 de escrita   |          1.5 ms           |          15 ms          |
-| Uso de CPU                |          80–90%           |         40–60%          |
-| Eficiência energética     |           Alta            |          Média          |
-| Escalabilidade horizontal |          Linear           |        Sublinear        |
-| Overhead de manutenção    |           Baixo           |          Alto           |
+| Métrica                   |   ScyllaDB (shard-per-core)    | Cassandra (tradicional) |
+| ------------------------- | :----------------------------: | :---------------------: |
+| Throughput máximo (ops/s) |            até 300k            |         até 80k         |
+| Latência p99 de leitura   |           até 4.5 ms           |       até 265 ms        |
+| Latência p99 de escrita   |           até 7.9ms            |       até 494 ms        |
+| Tempo para adicionar nó   |          \~37 minutos          |      \~107 minutos      |
+| Tempo para substituir nó  |          \~54 minutos          |      \~209 minutos      |
+| Tempo de compaction       | \~36 minutos (32x mais rápido) |     \~22 a 38 horas     |
 
 _Fontes: [ScyllaDB vs Cassandra Performance Comparison](https://www.datasciencecentral.com/scylla-vs-cassandra-performance-comparison/), [ScyllaDB Benchmarks](https://www.scylladb.com/product/benchmarks/), [ScyllaDB vs Apache Cassandra](https://www.scylladb.com/compare/scylladb-vs-apache-cassandra/)_
 
@@ -415,10 +421,10 @@ _Fontes: [ScyllaDB vs Cassandra Performance Comparison](https://www.datasciencec
 
 Mesmo com a migração para o ScyllaDB, um desafio persistia: o padrão de acesso do Discord gerava picos de tráfego concentrados em determinados canais, especialmente durante grandes anúncios ou menções em massa (@everyone). Para mitigar o risco de _hot partitions_, a equipe desenvolveu uma nova camada intermediária chamada **serviços de dados** (_data services_), implementada em Rust.
 
-Esses serviços atuam como um “buffer inteligente” entre a API do Discord e o banco de dados, com as seguintes funções:
+Esses serviços atuam como um "buffer inteligente" entre a API do Discord e o banco de dados, com as seguintes funções:
 
 - **Coalescência de requisições:** Se múltiplos usuários solicitam a mesma mensagem ou conjunto de mensagens simultaneamente, o serviço agrupa as requisições idênticas em uma única consulta ao banco, retornando o resultado para todos. Essa técnica, chamada coalescência de requisições, reduz drasticamente a concorrência no banco de dados e otimiza o acesso, sendo especialmente útil para workloads massivos e para evitar sobrecarga em partições quentes.
-- **Roteamento consistente:** Utilizando hash do `channel_id`, todas as requisições para um mesmo canal são direcionadas para a mesma instância do serviço, evitando concorrência descontrolada e protegendo o banco de dados de sobrecarga. Esse padrão de roteamento é fundamental para garantir isolamento e previsibilidade de performance.
+- **Roteamento consistente:** Utilizando hash do `channel_id`, todas as requisições para um mesmo canal são direcionadas para a mesma instância do serviço, evitando concorrência descontrolada e protegendo o banco de dados de sobrecarga.
 - **Concorrência segura:** O uso de Rust e do ecossistema Tokio permite alta performance e segurança em operações assíncronas, sem os riscos de concorrência típicos de linguagens como Java ou C++. O Rust foi escolhido por sua segurança de memória, performance próxima ao C++ e excelente suporte a programação concorrente.
 - **Comunicação eficiente:** Os serviços utilizam gRPC para comunicação entre si e com a API, garantindo baixa latência e escalabilidade horizontal.
 
@@ -430,17 +436,35 @@ A migração de trilhões de mensagens do Cassandra para o ScyllaDB foi um desaf
 
 O processo envolveu:
 
-1. **Provisionamento do novo cluster:** O ScyllaDB foi configurado com SSDs locais e RAID para maximizar desempenho e durabilidade. O uso de SSDs é fundamental para workloads de leitura intensiva e grandes volumes de dados.
+1. **Provisionamento do novo cluster:** O ScyllaDB foi configurado com SSDs locais e RAID para maximizar desempenho e durabilidade.
 2. **Gravação duplicada:** Durante a transição, novas mensagens eram gravadas tanto no Cassandra quanto no ScyllaDB, garantindo consistência e permitindo rollback em caso de falhas.
 3. **Ferramenta de migração em Rust:** Inicialmente, a migração seria feita com Spark, mas a equipe desenvolveu uma ferramenta própria em Rust, capaz de migrar até 3,2 milhões de mensagens por segundo, reduzindo o tempo estimado de migração de três meses para apenas nove dias. O uso de SQLite para validação local durante a migração foi uma escolha pragmática para garantir integridade dos dados.
-4. **Validação automática:** Uma fração das leituras era comparada entre os dois bancos para garantir integridade. Esse tipo de validação cruzada é essencial em migrações de sistemas críticos.
-5. **Resolução de tombstones:** A migração travou nos últimos 0,0001% dos dados devido a intervalos massivos de tombstones não compactados no Cassandra. Após compactação manual desses intervalos, a migração foi concluída com sucesso. O acúmulo de tombstones é um problema conhecido em bancos baseados em LSM-tree e pode ser estudado em artigos sobre "Cassandra tombstone compaction".
+4. **Validação automática:** Uma fração das leituras era comparada entre os dois bancos para garantir integridade.
+5. **Resolução de tombstones:** A migração travou nos últimos 0,0001% dos dados devido a intervalos massivos de tombstones não compactados no Cassandra. Após compactação manual desses intervalos, a migração foi concluída com sucesso.
+
+---
+
+**Sobre SSDs e RAID:**
+
+RAID (Redundant Array of Independent Disks) é uma técnica que combina múltiplos SSDs para funcionar como uma única unidade lógica. Essa configuração permite melhorar o desempenho, aumentar a segurança dos dados ou ambos, dependendo do modo utilizado.
+
+Principais tipos de RAID:
+
+| Tipo    | Como funciona              | Vantagem principal        |
+| ------- | -------------------------- | ------------------------- |
+| RAID 0  | Divide os dados (striping) | Alta velocidade           |
+| RAID 1  | Espelha os dados           | Segurança contra falhas   |
+| RAID 10 | Divide e espelha os dados  | Performance e redundância |
+
+Com SSDs, o RAID ajuda a equilibrar o desgaste dos discos, evita perda de dados e mantém alta performance — o que é essencial em bancos como o ScyllaDB.
+
+_Fontes:_ [A Guide to RAID in the Era of SSDs](https://xinnor.io/blog/a-guide-to-raid-pt-3-raid-in-the-era-of-ssds/), [SSD RAID: Boosting SSD Performance with RAID](https://www.enterprisestorageforum.com/hardware/ssd-raid-boosting-ssd-performance-with-raid/)
 
 ### Mudanças na Modelagem de Dados e Otimizações
 
 Curiosamente, a migração para o ScyllaDB não exigiu mudanças no esquema de dados principal. O modelo de partição por `(channel_id, bucket)` e ordenação por `message_id DESC` foi mantido, pois já estava otimizado para o padrão de acesso do Discord. No entanto, o ScyllaDB trouxe otimizações nativas, como suporte eficiente a consultas reversas e melhor distribuição de carga entre os shards.
 
-Além disso, os serviços de dados permitiram mitigar o problema das hot partitions sem alterar a modelagem, ao agrupar e roteirizar requisições de forma inteligente. Isso demonstra a importância de soluções arquiteturais além do banco de dados em si.
+Além disso, os serviços de dados permitiram mitigar o problema das hot partitions sem alterar a modelagem, ao agrupar e roteirizar requisições de forma inteligente.
 
 ### Resultados Obtidos
 
@@ -449,20 +473,8 @@ A migração para o ScyllaDB trouxe ganhos expressivos:
 - **Redução de infraestrutura:** O número de nós caiu de 177 (Cassandra) para 72 (ScyllaDB), com cada nó suportando 9 TB (vs. 4 TB anteriormente).
 - **Latência drasticamente menor:** A latência p99 de leitura caiu de 40–125 ms para 15 ms; a de escrita estabilizou em 5 ms.
 - **Menor custo operacional:** Menos nós, menos manutenção manual e maior previsibilidade.
-- **Resiliência comprovada:** O sistema suportou picos globais de tráfego sem degradação perceptível, como evidenciado durante a Copa do Mundo de 2022.
+- **Resiliência comprovada:** O sistema suportou picos globais de tráfego sem degradação perceptível.
 - **Escalabilidade sustentável:** O novo sistema permite crescer horizontalmente com adição de nós, mantendo performance estável.
-
-Esses resultados são corroborados por métricas apresentadas publicamente pela equipe do Discord e por relatos de outros grandes usuários do ScyllaDB, como Netflix e Apple.
-
-### Conceitos Técnicos Fundamentais
-
-Para compreender a fundo as decisões do Discord, é importante detalhar alguns conceitos:
-
-- **Hot Partition:** Partição que recebe tráfego desproporcional, sobrecarregando um nó e impactando a latência global. No Discord, grandes servidores ou eventos (@everyone) são fontes típicas desse problema.
-- **Tombstones:** Marcadores de exclusão em bancos baseados em LSM-tree. O acúmulo excessivo pode degradar a performance e travar operações de compactação e migração.
-- **LSM-Tree:** Estrutura de dados que prioriza escrita rápida em memória (memtable) e posterior flush para disco (SSTables), com compactação periódica. Essencial para bancos como Cassandra e ScyllaDB.
-- **Shard-per-Core:** Arquitetura do ScyllaDB onde cada núcleo físico opera como um shard isolado, maximizando o uso do hardware e evitando contenção.
-- **Coalescência de Requisições:** Técnica de agrupar múltiplas requisições idênticas para reduzir concorrência e otimizar acesso ao banco.
 
 ### Considerações Finais e Lições Aprendidas
 
@@ -470,9 +482,9 @@ A jornada do Discord ilustra a necessidade de evolução contínua em sistemas d
 
 **Lições importantes:**
 
-- **Monitoramento e automação são essenciais:** O sucesso da migração e da operação contínua dependeu de validação automatizada, reparos noturnos e monitoramento proativo.
-- **Adoção de tecnologias modernas:** O uso de Rust e ScyllaDB mostrou-se decisivo para superar limitações de soluções anteriores.
-- **Desafios futuros:** Apesar dos avanços, o Discord reconhece que novas ordens de magnitude trarão novos desafios, como _tiered storage_ (armazenamento em camadas) e sharding automático para clusters multi-TB por nó. Estratégias como uso de S3 para mensagens antigas ou Bloom filters para otimizar buscas por tombstones são discutidas na comunidade e podem ser exploradas em trabalhos futuros.
-- **Evitar vendor lock-in:** A dependência de soluções específicas (como ScyllaDB) é um risco a ser monitorado, e alternativas devem ser avaliadas periodicamente.
+- **Monitoramento e automação são essenciais**
+- **Adoção de tecnologias modernas**
+- **Desafios futuros:** como _tiered storage_ e **sharding automático** — técnica de dividir os dados em fragmentos independentes entre nós diferentes — para escalar clusters com múltiplos terabytes por nó.
+- **Evitar vendor lock-in** A dependência de soluções específicas (como ScyllaDB) é um risco a ser monitorado, e alternativas devem ser avaliadas periodicamente.
 
 ---
