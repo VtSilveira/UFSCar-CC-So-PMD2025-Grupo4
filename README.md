@@ -494,3 +494,15 @@ A jornada do Discord ilustra a necessidade de evolução contínua em sistemas d
 - **Evitar vendor lock-in** A dependência de soluções específicas (como ScyllaDB) é um risco a ser monitorado, e alternativas devem ser avaliadas periodicamente.
 
 ---
+
+## 6. Conclusão
+
+A evolução da infraestrutura do Discord reflete com clareza como sistemas precisam se adaptar diante do crescimento exponencial de usuários e dados. Desde a escolha inicial pelo MongoDB, motivada pela simplicidade e agilidade no desenvolvimento, até a adoção do Cassandra e, posteriormente, do ScyllaDB, cada mudança foi impulsionada por novos requisitos de escalabilidade, performance e manutenção.
+
+Inicialmente, com um único replica set no MongoDB e sem sharding, a prioridade era velocidade de entrega e baixo custo operacional, mas à medida que as mensagens começaram a crescer para centenas de milhões, problemas como latência imprevisível e limitações de memória exigiram uma reestruturação.
+
+A migração para o Cassandra trouxe ganhos substanciais, como a possibilidade de escalar horizontalmente e atender a requisitos rígidos de latência. Técnicas como bucketing e uso de Snowflakes para ordenação temporal das mensagens mostraram-se fundamentais. No entanto, os desafios continuaram: tombstones em excesso, pausas de garbage collection e partições quentes ainda causavam impacto direto na experiência do usuário.
+
+A migração final para o ScyllaDB, somada à criação de uma camada intermediária em Rust com coalescência de requisições e roteamento inteligente, permitiu que o Discord alcançasse um novo nível de estabilidade e desempenho, reduzindo o número de nós, o custo de manutenção e a latência das operações — mesmo com trilhões de mensagens armazenadas.
+
+Ao longo desse processo, ficou evidente que não há solução definitiva: há sempre a próxima escala, o próximo gargalo e as necessidades do momento. A chave está em arquitetar com consciência do momento atual, mas também com clareza de que mudanças virão. E o Discord demonstrou isso com excelência.
