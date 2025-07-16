@@ -1,4 +1,4 @@
-# O crescimento do Discord e o desafio de armazenar trilhões de mensagens
+# 1. O crescimento do Discord e o desafio de armazenar trilhões de mensagens
 
 O Discord é uma plataforma de comunicação largamente utilizada nos dias de hoje. Foi lançado em maio de 2015 e rapidamente conquistou o gosto do público. Em 2016, a plataforma, extraordinariamente, já registrava uma base ativa mensal de 10 milhões de usuários.
 
@@ -53,7 +53,7 @@ Fontes:
 
 ---
 
-## Objetivos
+## 2. Objetivos
 
 Este projeto se propõe a entender e explicar como o Discord armazena quantidades massivas de mensagens.
 
