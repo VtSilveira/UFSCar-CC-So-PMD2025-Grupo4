@@ -424,7 +424,13 @@ Mesmo com a migração para o ScyllaDB, um desafio persistia: o padrão de acess
 Esses serviços atuam como um "buffer inteligente" entre a API do Discord e o banco de dados, com as seguintes funções:
 
 - **Coalescência de requisições:** Se múltiplos usuários solicitam a mesma mensagem ou conjunto de mensagens simultaneamente, o serviço agrupa as requisições idênticas em uma única consulta ao banco, retornando o resultado para todos. Essa técnica, chamada coalescência de requisições, reduz drasticamente a concorrência no banco de dados e otimiza o acesso, sendo especialmente útil para workloads massivos e para evitar sobrecarga em partições quentes.
+
+  ![Exemplo coalescência de requisições](coalescencia.jpeg)
+
 - **Roteamento consistente:** Utilizando hash do `channel_id`, todas as requisições para um mesmo canal são direcionadas para a mesma instância do serviço, evitando concorrência descontrolada e protegendo o banco de dados de sobrecarga.
+
+  ![Exemplo de roteamento](roteamento.jpeg)
+
 - **Concorrência segura:** O uso de Rust e do ecossistema Tokio permite alta performance e segurança em operações assíncronas, sem os riscos de concorrência típicos de linguagens como Java ou C++. O Rust foi escolhido por sua segurança de memória, performance próxima ao C++ e excelente suporte a programação concorrente.
 - **Comunicação eficiente:** Os serviços utilizam gRPC para comunicação entre si e com a API, garantindo baixa latência e escalabilidade horizontal.
 
