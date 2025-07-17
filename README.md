@@ -1,3 +1,22 @@
+-----------------------------------------------
+Vitor Silveira - 802318
+
+Rafael de Campos Villa da Silveira - 801968
+
+Rafael Penido Soares - 802726
+
+--------------------------------------------------
+## Sumário
+
+1. [O crescimento do Discord e o desafio de armazenar trilhões de mensagens](#1-o-crescimento-do-discord-e-o-desafio-de-armazenar-trilhões-de-mensagens)
+2. [Objetivos](#2-objetivos)
+3. [Escolha do MongoDB (2015-2016)](#3-escolha-do-mongodb2015-2016)
+4. [Migração para o Cassandra (2017)](#4-migração-para-o-cassandra-2017)
+5. [Migração para o ScyllaDB (2023)](#5-migração-para-o-scylladb-2023)
+6. [Conclusão](#6-conclusão)
+
+-----------------------------------------------
+
 # 1. O crescimento do Discord e o desafio de armazenar trilhões de mensagens
 
 O Discord é uma plataforma de comunicação largamente utilizada nos dias de hoje. Foi lançado em maio de 2015 e rapidamente conquistou o gosto do público. Em 2016, a plataforma, extraordinariamente, já registrava uma base ativa mensal de 10 milhões de usuários.
